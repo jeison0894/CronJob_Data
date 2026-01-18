@@ -1,0 +1,63 @@
+name: Update Supabase Cache
+on:
+  schedule:
+    - cron: "0 12-23 * * *"
+    - cron: "0 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout data-cache branch
+        uses: actions/checkout@v3
+        with:
+          ref: data-cache
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Fetch from Supabase REST API
+        id: fetch
+        env:
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
+        run: |
+          curl -sL \
+            -H "apikey: ${SUPABASE_KEY}" \
+            -H "Authorization: Bearer ${SUPABASE_KEY}" \
+            "${SUPABASE_URL}/rest/v1/listProducts?select=*" \
+            > temp_data.json
+          
+          VALID="true"
+          
+          if ! jq empty temp_data.json 2>/dev/null; then
+            echo "❌ ERROR: Respuesta no es JSON válido"
+            head -n 20 temp_data.json
+            VALID="false"
+          elif ! jq -e 'type == "array"' temp_data.json > /dev/null 2>&1; then
+            echo "❌ ERROR: Respuesta no es un array"
+            jq '.' temp_data.json
+            VALID="false"
+          else
+            COUNT=$(jq 'length' temp_data.json)
+            echo "✅ JSON válido con $COUNT productos"
+            mv temp_data.json data_supabase.json
+          fi
+          
+          rm -f temp_data.json
+          echo "valid=$VALID" >> $GITHUB_OUTPUT
+
+      - name: Commit & Push
+        if: steps.fetch.outputs.valid == 'true'
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@github.com"
+          git add data_supabase.json
+          git commit -m "update data_supabase.json" || echo "no changes"
+          git push origin data-cache
+
+      - name: Report status
+        if: steps.fetch.outputs.valid == 'false'
+        run: echo "⚠️ No se actualizó el caché"
